@@ -1,0 +1,8 @@
+FROM golang:1.11-alpine
+
+COPY . /root/go/src/linstor-docker-volume
+WORKDIR /root/go/src/linstor-docker-volume
+
+RUN apk add libc-dev gcc git && go install
+
+CMD ["/go/bin/linstor-docker-volume"]
