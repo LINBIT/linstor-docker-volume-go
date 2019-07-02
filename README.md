@@ -12,7 +12,7 @@ Requires Docker 1.13.0 or higher
 
 ## Installing
 
-`docker plugin install lade/linstor CONTROLLERS=*CONTROLLERS*`
+`docker plugin install lade/linstor`
 
 ## Options
 

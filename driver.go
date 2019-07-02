@@ -26,18 +26,16 @@ const (
 )
 
 type linstorDriver struct {
-	controllers string
-	mount       string
-	node        string
-	out         io.Writer
+	mount string
+	node  string
+	out   io.Writer
 }
 
-func newLinstorDriver(controllers, mount, node string, out io.Writer) *linstorDriver {
+func newLinstorDriver(mount, node string, out io.Writer) *linstorDriver {
 	return &linstorDriver{
-		controllers: controllers,
-		mount:       mount,
-		node:        node,
-		out:         out,
+		mount: mount,
+		node:  node,
+		out:   out,
 	}
 }
 
@@ -185,9 +183,8 @@ func (l *linstorDriver) Capabilities() *volume.CapabilitiesResponse {
 
 func (l *linstorDriver) newResourceConfig(name string) linstor.ResourceDeploymentConfig {
 	return linstor.ResourceDeploymentConfig{
-		Name:        name,
-		Controllers: l.controllers,
-		LogOut:      l.out,
+		Name:   name,
+		LogOut: l.out,
 	}
 }
 

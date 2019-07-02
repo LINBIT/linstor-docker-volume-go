@@ -2,14 +2,6 @@
   "description": "Linstor volume plugin for Docker",
   "documentation": "https://docs.docker.com/engine/extend/plugins/",
   "entrypoint": ["/linstor-docker-volume"],
-  "env": [
-    {
-      "name": "CONTROLLERS",
-      "description": "Set linstor controllers",
-      "value": "",
-      "settable": ["value"]
-    }
-  ],
   "interface": {
     "socket": "linstor.sock",
     "types": ["docker.volumedriver/1.0"]
@@ -23,6 +15,12 @@
       "destination": "/dev",
       "options": ["rbind"],
       "source": "/dev",
+      "type": "bind"
+    },
+    {
+      "destination": "/etc/linstor",
+      "options": ["rbind"],
+      "source": "/etc/linstor",
       "type": "bind"
     }
   ],

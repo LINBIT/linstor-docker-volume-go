@@ -11,9 +11,8 @@ import (
 const linstorID = "linstor"
 
 var (
-	controllers = os.Getenv("CONTROLLERS")
-	mount       = filepath.Join(volume.DefaultDockerRootDirectory, linstorID)
-	out         = os.Stdout
+	mount = filepath.Join(volume.DefaultDockerRootDirectory, linstorID)
+	out   = os.Stdout
 )
 
 func main() {
@@ -23,7 +22,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	driver := newLinstorDriver(controllers, mount, node, out)
+	driver := newLinstorDriver(mount, node, out)
 	handler := volume.NewHandler(driver)
 	err = handler.ServeUnix(linstorID, 0)
 	if err != nil {

@@ -1,16 +1,15 @@
-FROM alpine:3.8
+FROM debian:stretch-slim
 
-ENV LINSTOR_VERSION 0.7.3
+ENV DEBIAN_FRONTEND=noninteractive \
+	DEB_LIST='/etc/apt/sources.list.d' \
+	PKG_DEP='curl gnupg'
 
-RUN set -ex \
-	&& apk add e2fsprogs make protobuf py-setuptools util-linux xfsprogs \
-	&& wget https://www.linbit.com/downloads/linstor/python-linstor-${LINSTOR_VERSION}.tar.gz \
-	&& tar -xzf python-linstor-${LINSTOR_VERSION}.tar.gz && cd python-linstor-${LINSTOR_VERSION} \
-	&& make install && cd .. && rm -r python-linstor* \
-	&& wget https://www.linbit.com/downloads/linstor/linstor-client-${LINSTOR_VERSION}.tar.gz \
-	&& tar -xzf linstor-client-${LINSTOR_VERSION}.tar.gz && cd linstor-client-${LINSTOR_VERSION} \
-	&& make install && cd .. && rm -r linstor-client* \
-	&& apk del make protobuf && rm -rf /var/cache/apk/* \
+RUN set -x \
+	&& apt-get update && apt-get install $PKG_DEP xfsprogs -y \
+	&& echo 'deb http://mirror.lade.io/debian stretch main' > $DEB_LIST/lade.list \
+	&& curl -sSL http://mirror.lade.io/lade.gpg | apt-key add - && apt-get update \
+	&& apt-get install --no-install-recommends linstor-client -y \
+	&& apt-get autoremove --purge $PKG_DEP -y && rm -rf /var/lib/apt/lists/* \
 	&& mkdir -p /run/docker/plugins
 
 COPY linstor-docker-volume linstor-docker-volume
