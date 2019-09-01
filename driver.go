@@ -1,234 +1,374 @@
 package main
 
 import (
-	"bufio"
-	"errors"
+	"context"
 	"fmt"
-	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 
-	linstor "github.com/LINBIT/golinstor"
+	"github.com/LINBIT/golinstor"
+	"github.com/LINBIT/golinstor/client"
+	"github.com/docker/go-connections/tlsconfig"
 	"github.com/docker/go-plugins-helpers/volume"
+	"github.com/mitchellh/mapstructure"
+	"github.com/vrischmann/envconfig"
+	"gopkg.in/ini.v1"
+	"k8s.io/kubernetes/pkg/util/mount"
 )
 
-const (
-	NodeListKey            = "nodelist"
-	StoragePoolKey         = "storagepool"
-	DisklessStoragePoolKey = "disklessstoragepool"
-	AutoPlaceKey           = "autoplace"
-	DisklessOnRemainingKey = "disklessonremaining"
-	SizeKiBKey             = "sizekib"
-	EncryptionKey          = "encryption"
-	FSTypeKey              = "fstype"
-)
-
-type linstorDriver struct {
-	mount string
-	node  string
-	out   io.Writer
+type LinstorConfig struct {
+	Controllers string
+	Username    string
+	Password    string
+	CertFile    string
+	KeyFile     string
+	CAFile      string
 }
 
-func newLinstorDriver(mount, node string, out io.Writer) *linstorDriver {
-	return &linstorDriver{
-		mount: mount,
-		node:  node,
-		out:   out,
+type LinstorParams struct {
+	ClientList          []string
+	NodeList            []string
+	ReplicasOnDifferent []string
+	ReplicasOnSame      []string
+	DisklessStoragePool string
+	DoNotPlaceWithRegex string
+	FS                  string
+	MountOpts           []string
+	StoragePool         string
+	SizeKiB             uint64
+	PlacementCount      int32
+	DisklessOnRemaining bool
+}
+
+type LinstorDriver struct {
+	config  string
+	node    string
+	root    string
+	mounter *mount.SafeFormatAndMount
+}
+
+func NewLinstorDriver(config, node, root string) *LinstorDriver {
+	return &LinstorDriver{
+		config: config,
+		node:   node,
+		root:   root,
+		mounter: &mount.SafeFormatAndMount{
+			Interface: mount.New("/bin/mount"),
+			Exec:      mount.NewOsExec(),
+		},
 	}
 }
 
-type linstorOpts struct {
-	linstor.ResourceDeploymentConfig
-	FSType string
-}
-
-func (l *linstorDriver) newLinstorOpts(name string, options map[string]string) (*linstorOpts, error) {
-	cfg := l.newResourceConfig(name)
-	opts := linstorOpts{
-		FSType: "ext4",
-	}
-	clean := strings.NewReplacer("-", "", "_", "")
-	for k, v := range options {
-		switch strings.ToLower(clean.Replace(k)) {
-		case NodeListKey:
-			cfg.NodeList = strings.Split(v, " ")
-		case StoragePoolKey:
-			cfg.StoragePool = v
-		case DisklessStoragePoolKey:
-			cfg.DisklessStoragePool = v
-		case AutoPlaceKey:
-			autoplace, err := strconv.ParseUint(v, 10, 64)
-			if err != nil {
-				return nil, fmt.Errorf("Unable to parse %s option", k)
+func (l *LinstorDriver) newBaseURL(hosts string) (*url.URL, error) {
+	scheme := "http"
+	host := "localhost:3370"
+	if hosts != "" {
+		host = strings.Split(hosts, ",")[0]
+		if s := strings.Split(host, "://"); len(s) == 2 {
+			if s[0] == "linstor+ssl" || s[0] == "https" {
+				scheme = "https"
 			}
-			cfg.AutoPlace = autoplace
-		case DisklessOnRemainingKey:
-			if strings.ToLower(v) == "yes" {
-				cfg.DisklessOnRemaining = true
-			}
-		case SizeKiBKey:
-			sizekib, err := strconv.ParseUint(v, 10, 64)
-			if err != nil {
-				return nil, fmt.Errorf("Unable to parse %s option", k)
-			}
-			cfg.SizeKiB = sizekib
-		case EncryptionKey:
-			if strings.ToLower(v) == "yes" {
-				cfg.Encryption = true
-			}
-		case FSTypeKey:
-			opts.FSType = v
+			host = s[1]
 		}
 	}
-	opts.ResourceDeploymentConfig = cfg
-	return &opts, nil
+
+	if !strings.Contains(host, ":") {
+		switch scheme {
+		case "http":
+			host += ":3370"
+		case "https":
+			host += ":3371"
+		}
+	}
+	return url.Parse(scheme + "://" + host)
 }
 
-func (l *linstorDriver) Create(req *volume.CreateRequest) error {
-	opts, err := l.newLinstorOpts(req.Name, req.Options)
+func (l *LinstorDriver) newClient() (*client.Client, error) {
+	config := new(LinstorConfig)
+	if err := l.loadConfig(config); err != nil {
+		return nil, err
+	}
+
+	err := envconfig.InitWithOptions(config, envconfig.Options{
+		Prefix:      "LS",
+		AllOptional: true,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	baseURL, err := l.newBaseURL(config.Controllers)
+	if err != nil {
+		return nil, err
+	}
+
+	tlsConfig, err := tlsconfig.Client(tlsconfig.Options{
+		CertFile:           config.CertFile,
+		KeyFile:            config.KeyFile,
+		CAFile:             config.CAFile,
+		InsecureSkipVerify: config.CAFile == "",
+		ExclusiveRootPools: true,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return client.NewClient(
+		client.BaseURL(baseURL),
+		client.BasicAuth(&client.BasicAuthCfg{
+			Username: config.Username,
+			Password: config.Password,
+		}),
+		client.HTTPClient(&http.Client{
+			Transport: &http.Transport{
+				TLSClientConfig: tlsConfig,
+			},
+		}),
+	)
+}
+
+func (l *LinstorDriver) newParams(name string, options map[string]string) (*LinstorParams, error) {
+	params := new(LinstorParams)
+	if err := l.loadConfig(params); err != nil {
+		return nil, err
+	}
+
+	if options == nil {
+		return params, nil
+	}
+
+	decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
+		Result:           params,
+		WeaklyTypedInput: true,
+		DecodeHook:       mapstructure.StringToSliceHookFunc(" "),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	err = decoder.Decode(options)
+	return params, err
+}
+
+func (l *LinstorDriver) Create(req *volume.CreateRequest) error {
+	params, err := l.newParams(req.Name, req.Options)
 	if err != nil {
 		return err
 	}
-	resource := linstor.NewResourceDeployment(opts.ResourceDeploymentConfig)
-	if err = resource.CreateAndAssign(); err != nil {
-		return err
-	}
-	path, err := resource.WaitForDevPath(l.node, 3)
+	c, err := l.newClient()
 	if err != nil {
 		return err
 	}
-	mounter := linstor.FSUtil{
-		ResourceDeployment: &resource,
-		FSType:             opts.FSType,
+	ctx := context.Background()
+	err = c.ResourceDefinitions.Create(ctx, client.ResourceDefinitionCreate{
+		ResourceDefinition: client.ResourceDefinition{
+			Name: req.Name,
+		},
+	})
+	if err != nil {
+		return err
 	}
-	return mounter.SafeFormat(path)
+	err = c.ResourceDefinitions.CreateVolumeDefinition(ctx, req.Name, client.VolumeDefinitionCreate{
+		VolumeDefinition: client.VolumeDefinition{
+			SizeKib: params.SizeKiB,
+		},
+	})
+	if err != nil {
+		return err
+	}
+	if len(params.NodeList)+len(params.ClientList) == 0 {
+		return c.Resources.Autoplace(ctx, req.Name, client.AutoPlaceRequest{
+			DisklessOnRemaining: params.DisklessOnRemaining,
+			SelectFilter: client.AutoSelectFilter{
+				PlaceCount:           params.PlacementCount,
+				StoragePool:          params.StoragePool,
+				NotPlaceWithRscRegex: params.DoNotPlaceWithRegex,
+				ReplicasOnSame:       params.ReplicasOnSame,
+				ReplicasOnDifferent:  params.ReplicasOnDifferent,
+			},
+		})
+	}
+	for _, node := range params.NodeList {
+		err = c.Resources.Create(ctx, l.toDiskfullCreate(req.Name, node, params))
+		if err != nil {
+			return err
+		}
+	}
+	for _, node := range params.ClientList {
+		err = c.Resources.Create(ctx, l.toDisklessCreate(req.Name, node, params))
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
-func (l *linstorDriver) Get(req *volume.GetRequest) (*volume.GetResponse, error) {
-	resource := l.newResourceDeployment(req.Name)
-	if err := l.resourceMustExist(resource); err != nil {
+func (l *LinstorDriver) Get(req *volume.GetRequest) (*volume.GetResponse, error) {
+	c, err := l.newClient()
+	if err != nil {
+		return nil, err
+	}
+	ctx := context.Background()
+	resourceDef, err := c.ResourceDefinitions.Get(ctx, req.Name)
+	if err != nil {
 		return nil, err
 	}
 	vol := &volume.Volume{
-		Name:       resource.Name,
-		Mountpoint: l.mountpoint(resource.Name),
+		Name:       resourceDef.Name,
+		Mountpoint: l.mountPoint(resourceDef.Name),
 	}
 	return &volume.GetResponse{vol}, nil
 }
 
-func (l *linstorDriver) List() (*volume.ListResponse, error) {
-	resource := l.newResourceDeployment("List")
-	list, err := resource.ListResourceDefinitions()
+func (l *LinstorDriver) List() (*volume.ListResponse, error) {
+	c, err := l.newClient()
+	if err != nil {
+		return nil, err
+	}
+	ctx := context.Background()
+	resourceDefs, err := c.ResourceDefinitions.GetAll(ctx)
 	if err != nil {
 		return nil, err
 	}
 	vols := []*volume.Volume{}
-	for _, rd := range list {
+	for _, resourceDef := range resourceDefs {
 		vols = append(vols, &volume.Volume{
-			Name:       rd.RscName,
-			Mountpoint: l.mountpoint(rd.RscName),
+			Name:       resourceDef.Name,
+			Mountpoint: l.mountPoint(resourceDef.Name),
 		})
 	}
 	return &volume.ListResponse{Volumes: vols}, nil
 }
 
-func (l *linstorDriver) Remove(req *volume.RemoveRequest) error {
-	resource := l.newResourceDeployment(req.Name)
-	return resource.Delete()
-}
-
-func (l *linstorDriver) Path(req *volume.PathRequest) (*volume.PathResponse, error) {
-	return &volume.PathResponse{Mountpoint: l.mountpoint(req.Name)}, nil
-}
-
-func (l *linstorDriver) Mount(req *volume.MountRequest) (*volume.MountResponse, error) {
-	resource := l.newResourceDeployment(req.Name)
-	if err := l.resourceMustExist(resource); err != nil {
-		return nil, err
-	}
-	source, err := resource.GetDevPath(l.node, false)
+func (l *LinstorDriver) Remove(req *volume.RemoveRequest) error {
+	c, err := l.newClient()
 	if err != nil {
-		return nil, err
-	}
-	target := l.mountpath(resource.Name)
-	mounter := linstor.FSUtil{
-		ResourceDeployment: &resource,
-	}
-	err = mounter.Mount(source, target)
-	if err != nil {
-		return nil, err
-	}
-	return &volume.MountResponse{Mountpoint: target}, err
-}
-
-func (l *linstorDriver) Unmount(req *volume.UnmountRequest) error {
-	resource := l.newResourceDeployment(req.Name)
-	if err := l.resourceMustExist(resource); err != nil {
 		return err
 	}
-	path := l.mountpath(req.Name)
-	mounter := linstor.FSUtil{
-		ResourceDeployment: &resource,
+	ctx := context.Background()
+	snaps, err := c.Resources.GetSnapshots(ctx, req.Name)
+	if err != nil {
+		return err
 	}
-	return mounter.UnMount(path)
+	for _, snap := range snaps {
+		err = c.Resources.DeleteSnapshot(ctx, req.Name, snap.Name)
+		if err != nil {
+			return err
+		}
+	}
+	return c.ResourceDefinitions.Delete(ctx, req.Name)
 }
 
-func (l *linstorDriver) Capabilities() *volume.CapabilitiesResponse {
+func (l *LinstorDriver) Path(req *volume.PathRequest) (*volume.PathResponse, error) {
+	return &volume.PathResponse{Mountpoint: l.mountPoint(req.Name)}, nil
+}
+
+func (l *LinstorDriver) Mount(req *volume.MountRequest) (*volume.MountResponse, error) {
+	params, err := l.newParams(req.Name, nil)
+	if err != nil {
+		return nil, err
+	}
+	c, err := l.newClient()
+	if err != nil {
+		return nil, err
+	}
+	ctx := context.Background()
+	if _, err = c.Resources.Get(ctx, req.Name, l.node); err == client.NotFoundError {
+		err = c.Resources.Create(ctx, l.toDisklessCreate(req.Name, l.node, params))
+		if err != nil {
+			return nil, err
+		}
+	}
+	vol, err := c.Resources.GetVolume(ctx, req.Name, l.node, 0)
+	if err != nil {
+		return nil, err
+	}
+	source := vol.DevicePath
+	inUse, err := l.mounter.DeviceOpened(source)
+	if err != nil {
+		return nil, err
+	}
+	if inUse {
+		return nil, fmt.Errorf("unable to get exclusive open on %s", source)
+	}
+	target := l.mountPath(req.Name)
+	if err = l.mounter.MakeDir(target); err != nil {
+		return nil, err
+	}
+	err = l.mounter.FormatAndMount(source, target, params.FS, params.MountOpts)
+	if err != nil {
+		return nil, err
+	}
+	return &volume.MountResponse{Mountpoint: target}, nil
+}
+
+func (l *LinstorDriver) Unmount(req *volume.UnmountRequest) error {
+	target := l.mountPath(req.Name)
+	notMounted, err := l.mounter.IsNotMountPoint(target)
+	if err != nil || notMounted {
+		return err
+	}
+	return l.mounter.Unmount(target)
+}
+
+func (l *LinstorDriver) Capabilities() *volume.CapabilitiesResponse {
 	return &volume.CapabilitiesResponse{
 		Capabilities: volume.Capability{Scope: "global"},
 	}
 }
 
-func (l *linstorDriver) newResourceConfig(name string) linstor.ResourceDeploymentConfig {
-	return linstor.ResourceDeploymentConfig{
-		Name:   name,
-		LogOut: l.out,
+func (l *LinstorDriver) loadConfig(result interface{}) error {
+	if _, err := os.Stat(l.config); os.IsNotExist(err) {
+		return nil
 	}
-}
-
-func (l *linstorDriver) newResourceDeployment(name string) linstor.ResourceDeployment {
-	cfg := l.newResourceConfig(name)
-	return linstor.NewResourceDeployment(cfg)
-}
-
-func (l *linstorDriver) resourceMustExist(resource linstor.ResourceDeployment) error {
-	exists, err := resource.Exists()
+	file, err := ini.InsensitiveLoad(l.config)
 	if err != nil {
 		return err
 	}
-	if !exists {
-		return errors.New("Can't find volume")
-	}
-	return nil
+	return file.Section("global").MapTo(result)
 }
 
-func (l *linstorDriver) mountpath(name string) string {
-	return filepath.Join(l.mount, name)
+func (l *LinstorDriver) mountPath(name string) string {
+	return filepath.Join(l.root, name)
 }
 
-func (l *linstorDriver) mountpoint(name string) string {
-	path := l.mountpath(name)
-	if l.isMounted(path) {
-		return path
+func (l *LinstorDriver) mountPoint(name string) string {
+	path := l.mountPath(name)
+	notMounted, err := l.mounter.IsNotMountPoint(path)
+	if err != nil || notMounted {
+		return ""
 	}
-	return ""
+	return path
 }
 
-func (l *linstorDriver) isMounted(path string) bool {
-	file, err := os.Open("/proc/mounts")
-	if err != nil {
-		return false
+func (l *LinstorDriver) toDiskfullCreate(name, node string, params *LinstorParams) client.ResourceCreate {
+	props := make(map[string]string)
+	if params.StoragePool != "" {
+		props[linstor.KeyStorPoolName] = params.StoragePool
 	}
-	defer file.Close()
+	return client.ResourceCreate{
+		Resource: client.Resource{
+			Name:     name,
+			NodeName: node,
+			Props:    props,
+		},
+	}
+}
 
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		fields := strings.Fields(scanner.Text())
-		if len(fields) > 1 && fields[1] == path {
-			return true
-		}
+func (l *LinstorDriver) toDisklessCreate(name, node string, params *LinstorParams) client.ResourceCreate {
+	props := make(map[string]string)
+	if params.DisklessStoragePool != "" {
+		props[linstor.KeyStorPoolName] = params.DisklessStoragePool
 	}
-	return false
+	return client.ResourceCreate{
+		Resource: client.Resource{
+			Name:     name,
+			NodeName: node,
+			Props:    props,
+			Flags:    []string{linstor.FlagDiskless},
+		},
+	}
 }

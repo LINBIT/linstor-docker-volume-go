@@ -2,6 +2,38 @@
   "description": "Linstor volume plugin for Docker",
   "documentation": "https://docs.docker.com/engine/extend/plugins/",
   "entrypoint": ["/linstor-docker-volume"],
+  "env": [
+    {
+      "name": "LS_CONTROLLERS",
+      "settable": ["value"],
+      "value": ""
+    },
+    {
+      "name": "LS_USERNAME",
+      "settable": ["value"],
+      "value": ""
+    },
+    {
+      "name": "LS_PASSWORD",
+      "settable": ["value"],
+      "value": ""
+    },
+    {
+      "name": "LS_CERT_FILE",
+      "settable": ["value"],
+      "value": ""
+    },
+    {
+      "name": "LS_KEY_FILE",
+      "settable": ["value"],
+      "value": ""
+    },
+    {
+      "name": "LS_CA_FILE",
+      "settable": ["value"],
+      "value": ""
+    }
+  ],
   "interface": {
     "socket": "linstor.sock",
     "types": ["docker.volumedriver/1.0"]

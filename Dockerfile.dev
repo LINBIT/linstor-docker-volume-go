@@ -1,8 +1,8 @@
-FROM golang:1.11-stretch
+FROM golang:1.12-alpine
 
 COPY . /root/go/src/linstor-docker-volume
 WORKDIR /root/go/src/linstor-docker-volume
 
-RUN go install
+RUN apk add --no-cache git && go install
 
 CMD ["/go/bin/linstor-docker-volume"]

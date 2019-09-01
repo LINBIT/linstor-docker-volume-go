@@ -1,6 +1,8 @@
 package main
 
 import (
+	"fmt"
+	"io/ioutil"
 	"log"
 	"os"
 	"path/filepath"
@@ -8,24 +10,27 @@ import (
 	"github.com/docker/go-plugins-helpers/volume"
 )
 
-const linstorID = "linstor"
-
-var (
-	mount = filepath.Join(volume.DefaultDockerRootDirectory, linstorID)
-	out   = os.Stdout
+const (
+	config = "/etc/linstor/docker-volume.conf"
+	plugin = "linstor"
 )
 
+var (
+	root = filepath.Join(volume.DefaultDockerRootDirectory, plugin)
+)
+
+func init() {
+	log.SetOutput(ioutil.Discard)
+}
+
 func main() {
-	log.SetOutput(out)
 	node, err := os.Hostname()
 	if err != nil {
-		log.Fatal(err)
+		fmt.Fprintln(os.Stderr, err)
+		return
 	}
 
-	driver := newLinstorDriver(mount, node, out)
+	driver := NewLinstorDriver(config, node, root)
 	handler := volume.NewHandler(driver)
-	err = handler.ServeUnix(linstorID, 0)
-	if err != nil {
-		log.Fatal(err)
-	}
+	fmt.Println(handler.ServeUnix(plugin, 0))
 }

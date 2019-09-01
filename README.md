@@ -14,23 +14,14 @@ Requires Docker 1.13.0 or higher
 
 `docker plugin install lade/linstor`
 
-## Options
+## Configuration
 
-`--opt node-list=*NODES*`
-
-`--opt storage-pool=*POOL*`
-
-`--opt diskless-storage-pool=*POOL*`
-
-`--opt auto-place=*COUNT*`
-
-`--opt diskless-on-remaining=[yes/no]`
-
-`--opt size-kib=*SIZE*`
-
-`--opt encryption=[yes/no]`
-
-`--opt fs-type=*TYPE*`
+```
+cat /etc/linstor/docker-volume.conf
+[global]
+controllers = linstor://hostnameofcontroller
+fs = xfs
+```
 
 ## License
 GPL2
