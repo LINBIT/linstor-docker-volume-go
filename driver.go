@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/LINBIT/golinstor"
+	linstor "github.com/LINBIT/golinstor"
 	"github.com/LINBIT/golinstor/client"
 	"github.com/docker/go-connections/tlsconfig"
 	"github.com/docker/go-plugins-helpers/volume"
@@ -17,6 +17,10 @@ import (
 	"github.com/vrischmann/envconfig"
 	"gopkg.in/ini.v1"
 	"k8s.io/kubernetes/pkg/util/mount"
+)
+
+const (
+	datadir = "data"
 )
 
 type LinstorConfig struct {
@@ -294,7 +298,7 @@ func (l *LinstorDriver) Mount(req *volume.MountRequest) (*volume.MountResponse, 
 	if inUse {
 		return nil, fmt.Errorf("unable to get exclusive open on %s", source)
 	}
-	target := l.mountPath(req.Name)
+	target := l.realMountPath(req.Name)
 	if err = l.mounter.MakeDir(target); err != nil {
 		return nil, err
 	}
@@ -302,16 +306,30 @@ func (l *LinstorDriver) Mount(req *volume.MountRequest) (*volume.MountResponse, 
 	if err != nil {
 		return nil, err
 	}
-	return &volume.MountResponse{Mountpoint: target}, nil
+
+	mnt := l.reportedMountPath(req.Name)
+	if _, err := os.Stat(mnt); os.IsNotExist(err) { // check for remount
+		if err = l.mounter.MakeDir(mnt); err != nil {
+			return nil, err
+		}
+	}
+
+	return &volume.MountResponse{Mountpoint: mnt}, nil
 }
 
 func (l *LinstorDriver) Unmount(req *volume.UnmountRequest) error {
-	target := l.mountPath(req.Name)
+	target := l.realMountPath(req.Name)
 	notMounted, err := l.mounter.IsNotMountPoint(target)
 	if err != nil || notMounted {
 		return err
 	}
-	return l.mounter.Unmount(target)
+	if err := l.mounter.Unmount(target); err != nil {
+		return err
+	}
+
+	// try to remove now unused dir
+	_ = os.Remove(target)
+	return nil
 }
 
 func (l *LinstorDriver) Capabilities() *volume.CapabilitiesResponse {
@@ -331,17 +349,21 @@ func (l *LinstorDriver) loadConfig(result interface{}) error {
 	return file.Section("global").MapTo(result)
 }
 
-func (l *LinstorDriver) mountPath(name string) string {
+func (l *LinstorDriver) realMountPath(name string) string {
 	return filepath.Join(l.root, name)
 }
 
+func (l *LinstorDriver) reportedMountPath(name string) string {
+	return filepath.Join(l.realMountPath(name), datadir)
+}
+
 func (l *LinstorDriver) mountPoint(name string) string {
-	path := l.mountPath(name)
+	path := l.realMountPath(name)
 	notMounted, err := l.mounter.IsNotMountPoint(path)
 	if err != nil || notMounted {
 		return ""
 	}
-	return path
+	return l.reportedMountPath(name)
 }
 
 func (l *LinstorDriver) toDiskfullCreate(name, node string, params *LinstorParams) client.ResourceCreate {
