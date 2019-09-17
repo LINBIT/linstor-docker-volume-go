@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -244,22 +246,7 @@ func (l *LinstorDriver) List() (*volume.ListResponse, error) {
 }
 
 func (l *LinstorDriver) Remove(req *volume.RemoveRequest) error {
-	c, err := l.newClient()
-	if err != nil {
-		return err
-	}
-	ctx := context.Background()
-	snaps, err := c.Resources.GetSnapshots(ctx, req.Name)
-	if err != nil {
-		return err
-	}
-	for _, snap := range snaps {
-		err = c.Resources.DeleteSnapshot(ctx, req.Name, snap.Name)
-		if err != nil {
-			return err
-		}
-	}
-	return c.ResourceDefinitions.Delete(ctx, req.Name)
+	return l.remove(req.Name, true)
 }
 
 func (l *LinstorDriver) Path(req *volume.PathRequest) (*volume.PathResponse, error) {
@@ -325,6 +312,15 @@ func (l *LinstorDriver) Unmount(req *volume.UnmountRequest) error {
 
 	// try to remove now unused dir
 	_ = os.Remove(target)
+
+	diskless, err := l.isDiskless(req.Name)
+	// in this case we don't really care about the error, just log it, and keep the diskless assignment.
+	if err != nil {
+		log.Println(err)
+	} else if diskless {
+		return l.remove(req.Name, false)
+	}
+
 	return nil
 }
 
@@ -389,4 +385,52 @@ func (l *LinstorDriver) toDisklessCreate(name, node string, params *LinstorParam
 			Flags:    []string{linstor.FlagDiskless},
 		},
 	}
+}
+
+func (l *LinstorDriver) isDiskless(name string) (bool, error) {
+	lopt := client.ListOpts{Resource: []string{name}, Node: []string{l.node}}
+	c, err := l.newClient()
+	if err != nil {
+		return false, err
+	}
+	ctx := context.Background()
+
+	// view to get storage information as well
+	resources, err := c.Resources.GetResourceView(ctx, &lopt)
+	if err != nil {
+		return false, err
+	}
+	if len(resources) != 1 {
+		return false, errors.New("Resource filter has to contain exactly one resource")
+	}
+	if len(resources[0].Volumes) != 1 {
+		return false, errors.New("There has to be exactly one volume in the resource")
+	}
+
+	return resources[0].Volumes[0].ProviderKind == client.DISKLESS, nil
+}
+
+func (l *LinstorDriver) remove(name string, global bool) error {
+	c, err := l.newClient()
+	if err != nil {
+		return err
+	}
+	ctx := context.Background()
+
+	if !global {
+		return c.Resources.Delete(ctx, name, l.node)
+	}
+
+	// global
+	snaps, err := c.Resources.GetSnapshots(ctx, name)
+	if err != nil {
+		return err
+	}
+	for _, snap := range snaps {
+		err = c.Resources.DeleteSnapshot(ctx, name, snap.Name)
+		if err != nil {
+			return err
+		}
+	}
+	return c.ResourceDefinitions.Delete(ctx, name)
 }
