@@ -33,8 +33,7 @@ type LinstorConfig struct {
 }
 
 type LinstorParams struct {
-	ClientList          []string
-	NodeList            []string
+	Nodes               []string
 	ReplicasOnDifferent []string
 	ReplicasOnSame      []string
 	DisklessStoragePool string
@@ -42,8 +41,8 @@ type LinstorParams struct {
 	FS                  string
 	MountOpts           []string
 	StoragePool         string
-	SizeKiB             uint64
-	PlacementCount      int32
+	Size                uint64
+	Replicas            int32
 	DisklessOnRemaining bool
 }
 
@@ -177,17 +176,20 @@ func (l *LinstorDriver) Create(req *volume.CreateRequest) error {
 	}
 	err = c.ResourceDefinitions.CreateVolumeDefinition(ctx, req.Name, client.VolumeDefinitionCreate{
 		VolumeDefinition: client.VolumeDefinition{
-			SizeKib: params.SizeKiB,
+			SizeKib: params.Size,
 		},
 	})
 	if err != nil {
 		return err
 	}
-	if len(params.NodeList)+len(params.ClientList) == 0 {
+	if len(params.Nodes) == 0 {
+		if params.Replicas == 0 {
+			params.Replicas = 2
+		}
 		return c.Resources.Autoplace(ctx, req.Name, client.AutoPlaceRequest{
 			DisklessOnRemaining: params.DisklessOnRemaining,
 			SelectFilter: client.AutoSelectFilter{
-				PlaceCount:           params.PlacementCount,
+				PlaceCount:           params.Replicas,
 				StoragePool:          params.StoragePool,
 				NotPlaceWithRscRegex: params.DoNotPlaceWithRegex,
 				ReplicasOnSame:       params.ReplicasOnSame,
@@ -195,14 +197,8 @@ func (l *LinstorDriver) Create(req *volume.CreateRequest) error {
 			},
 		})
 	}
-	for _, node := range params.NodeList {
+	for _, node := range params.Nodes {
 		err = c.Resources.Create(ctx, l.toDiskfullCreate(req.Name, node, params))
-		if err != nil {
-			return err
-		}
-	}
-	for _, node := range params.ClientList {
-		err = c.Resources.Create(ctx, l.toDisklessCreate(req.Name, node, params))
 		if err != nil {
 			return err
 		}
