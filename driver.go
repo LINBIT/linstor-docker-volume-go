@@ -185,6 +185,10 @@ func (l *LinstorDriver) newParams(name string, options map[string]string) (*Lins
 		params.FS = "ext4"
 	}
 
+	if params.Replicas == 0 {
+		params.Replicas = 2
+	}
+
 	return params, nil
 }
 
@@ -220,9 +224,6 @@ func (l *LinstorDriver) Create(req *volume.CreateRequest) error {
 		return err
 	}
 	if len(params.Nodes) == 0 {
-		if params.Replicas == 0 {
-			params.Replicas = 2
-		}
 		return c.Resources.Autoplace(ctx, req.Name, client.AutoPlaceRequest{
 			DisklessOnRemaining: params.DisklessOnRemaining,
 			SelectFilter: client.AutoSelectFilter{
