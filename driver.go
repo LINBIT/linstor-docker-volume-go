@@ -26,6 +26,7 @@ const (
 	datadir         = "data"
 	pluginFlagKey   = "Aux/is-linstor-docker-volume"
 	pluginFlagValue = "true"
+	pluginFSTypeKey = "FileSystem/Type"
 )
 
 type LinstorConfig struct {
@@ -44,6 +45,7 @@ type LinstorParams struct {
 	DisklessStoragePool string
 	DoNotPlaceWithRegex string
 	FS                  string
+	FSOpts              string
 	MountOpts           []string
 	StoragePool         string
 	Size                string
@@ -179,6 +181,10 @@ func (l *LinstorDriver) newParams(name string, options map[string]string) (*Lins
 	}
 	params.SizeKiB = uint64(bytes / unit.K)
 
+	if params.FS == "" {
+		params.FS = "ext4"
+	}
+
 	return params, nil
 }
 
@@ -194,8 +200,12 @@ func (l *LinstorDriver) Create(req *volume.CreateRequest) error {
 	ctx := context.Background()
 	err = c.ResourceDefinitions.Create(ctx, client.ResourceDefinitionCreate{
 		ResourceDefinition: client.ResourceDefinition{
-			Name:  req.Name,
-			Props: map[string]string{pluginFlagKey: pluginFlagValue},
+			Name: req.Name,
+			Props: map[string]string{
+				pluginFlagKey:           pluginFlagValue,
+				pluginFSTypeKey:         params.FS,
+				"FileSystem/MkfsParams": params.FSOpts,
+			},
 		},
 	})
 	if err != nil {
@@ -300,6 +310,16 @@ func (l *LinstorDriver) Mount(req *volume.MountRequest) (*volume.MountResponse, 
 			return nil, err
 		}
 	}
+	// properties are not merged, so we have to query the resdef
+	// as we set the property there
+	resdef, err := c.ResourceDefinitions.Get(ctx, req.Name)
+	if err != nil {
+		return nil, err
+	}
+	fstype, ok := resdef.Props[pluginFSTypeKey]
+	if !ok {
+		return nil, fmt.Errorf("Volume '%s' did not contain a file system key", req.Name)
+	}
 	vol, err := c.Resources.GetVolume(ctx, req.Name, l.node, 0)
 	if err != nil {
 		return nil, err
@@ -316,7 +336,7 @@ func (l *LinstorDriver) Mount(req *volume.MountRequest) (*volume.MountResponse, 
 	if err = l.mounter.MakeDir(target); err != nil {
 		return nil, err
 	}
-	err = l.mounter.FormatAndMount(source, target, params.FS, params.MountOpts)
+	err = l.mounter.Mount(source, target, fstype, params.MountOpts)
 	if err != nil {
 		return nil, err
 	}
