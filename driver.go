@@ -16,6 +16,7 @@ import (
 	"github.com/docker/go-connections/tlsconfig"
 	"github.com/docker/go-plugins-helpers/volume"
 	"github.com/mitchellh/mapstructure"
+	"github.com/rck/unit"
 	"github.com/vrischmann/envconfig"
 	"gopkg.in/ini.v1"
 	"k8s.io/kubernetes/pkg/util/mount"
@@ -45,7 +46,8 @@ type LinstorParams struct {
 	FS                  string
 	MountOpts           []string
 	StoragePool         string
-	Size                uint64
+	Size                string
+	SizeKiB             uint64
 	Replicas            int32
 	DisklessOnRemaining bool
 }
@@ -156,8 +158,28 @@ func (l *LinstorDriver) newParams(name string, options map[string]string) (*Lins
 		return nil, err
 	}
 
-	err = decoder.Decode(options)
-	return params, err
+	if err := decoder.Decode(options); err != nil {
+		return nil, err
+	}
+
+	// convert string Size to SizeKiB
+	if params.Size == "" {
+		params.Size = "100MB"
+	}
+	u := unit.MustNewUnit(unit.DefaultUnits)
+	strSize := params.Size
+	v, err := u.ValueFromString(strSize)
+	if err != nil {
+		return nil, fmt.Errorf("Could not convert '%s' to bytes: %v", strSize, err)
+	}
+	bytes := v.Value
+	lower := 4 * unit.M
+	if bytes < lower {
+		bytes = lower
+	}
+	params.SizeKiB = uint64(bytes / unit.K)
+
+	return params, nil
 }
 
 func (l *LinstorDriver) Create(req *volume.CreateRequest) error {
@@ -181,7 +203,7 @@ func (l *LinstorDriver) Create(req *volume.CreateRequest) error {
 	}
 	err = c.ResourceDefinitions.CreateVolumeDefinition(ctx, req.Name, client.VolumeDefinitionCreate{
 		VolumeDefinition: client.VolumeDefinition{
-			SizeKib: params.Size,
+			SizeKib: params.SizeKiB,
 		},
 	})
 	if err != nil {
