@@ -22,7 +22,9 @@ import (
 )
 
 const (
-	datadir = "data"
+	datadir         = "data"
+	pluginFlagKey   = "Aux/is-linstor-docker-volume"
+	pluginFlagValue = "true"
 )
 
 type LinstorConfig struct {
@@ -170,7 +172,8 @@ func (l *LinstorDriver) Create(req *volume.CreateRequest) error {
 	ctx := context.Background()
 	err = c.ResourceDefinitions.Create(ctx, client.ResourceDefinitionCreate{
 		ResourceDefinition: client.ResourceDefinition{
-			Name: req.Name,
+			Name:  req.Name,
+			Props: map[string]string{pluginFlagKey: pluginFlagValue},
 		},
 	})
 	if err != nil {
@@ -218,6 +221,9 @@ func (l *LinstorDriver) Get(req *volume.GetRequest) (*volume.GetResponse, error)
 	if err != nil {
 		return nil, err
 	}
+	if resourceDef.Props[pluginFlagKey] != pluginFlagValue {
+		return nil, fmt.Errorf("Volume '%s' is not managed by this plugin", req.Name)
+	}
 	vol := &volume.Volume{
 		Name:       resourceDef.Name,
 		Mountpoint: l.mountPoint(resourceDef.Name),
@@ -237,6 +243,9 @@ func (l *LinstorDriver) List() (*volume.ListResponse, error) {
 	}
 	vols := []*volume.Volume{}
 	for _, resourceDef := range resourceDefs {
+		if resourceDef.Props[pluginFlagKey] != pluginFlagValue {
+			continue
+		}
 		vols = append(vols, &volume.Volume{
 			Name:       resourceDef.Name,
 			Mountpoint: l.mountPoint(resourceDef.Name),
