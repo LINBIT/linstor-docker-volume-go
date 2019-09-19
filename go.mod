@@ -7,6 +7,7 @@ require (
 	github.com/docker/go-plugins-helpers v0.0.0-20181025120712-1e6269c305b8
 	github.com/mitchellh/mapstructure v1.1.2
 	github.com/pkg/errors v0.8.1 // indirect
+	github.com/rck/unit v0.0.2
 	github.com/vrischmann/envconfig v1.2.0
 	gopkg.in/ini.v1 v1.46.0
 	k8s.io/apimachinery v0.0.0-20190827074644-f378a67c6af3 // indirect
