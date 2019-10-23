@@ -160,7 +160,7 @@ func (l *LinstorDriver) newParams(name string, options map[string]string) (*Lins
 		return nil, err
 	}
 
-	if err := decoder.Decode(options); err != nil {
+	if err = decoder.Decode(options); err != nil {
 		return nil, err
 	}
 
@@ -343,7 +343,7 @@ func (l *LinstorDriver) Mount(req *volume.MountRequest) (*volume.MountResponse, 
 	}
 
 	mnt := l.reportedMountPath(req.Name)
-	if _, err := os.Stat(mnt); os.IsNotExist(err) { // check for remount
+	if _, err = os.Stat(mnt); os.IsNotExist(err) { // check for remount
 		if err = l.mounter.MakeDir(mnt); err != nil {
 			return nil, err
 		}
@@ -358,7 +358,7 @@ func (l *LinstorDriver) Unmount(req *volume.UnmountRequest) error {
 	if err != nil || notMounted {
 		return err
 	}
-	if err := l.mounter.Unmount(target); err != nil {
+	if err = l.mounter.Unmount(target); err != nil {
 		return err
 	}
 
