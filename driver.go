@@ -197,6 +197,11 @@ func (l *LinstorDriver) Create(req *volume.CreateRequest) error {
 	if err != nil {
 		return err
 	}
+	if len(params.Nodes) == 0 {
+		if err = l.canAutoplace(params); err != nil {
+			return err
+		}
+	}
 	c, err := l.newClient()
 	if err != nil {
 		return err
@@ -437,6 +442,32 @@ func (l *LinstorDriver) toDisklessCreate(name, node string, params *LinstorParam
 			Flags:    []string{linstor.FlagDiskless},
 		},
 	}
+}
+
+func (l *LinstorDriver) canAutoplace(params *LinstorParams) error {
+	c, err := l.newClient()
+	if err != nil {
+		return err
+	}
+	ctx := context.Background()
+	pools, err := c.Nodes.GetStoragePoolView(ctx)
+	if err != nil {
+		return err
+	}
+	nodes := map[string]int32{}
+	for _, sp := range pools {
+		if sp.ProviderKind == client.DISKLESS || int64(params.SizeKiB) > sp.FreeCapacity {
+			continue
+		}
+		if params.StoragePool != "" && params.StoragePool != sp.StoragePoolName {
+			continue
+		}
+		nodes[sp.StoragePoolName] += 1
+		if params.Replicas <= nodes[sp.StoragePoolName] {
+			return nil
+		}
+	}
+	return fmt.Errorf("At least %d nodes required", params.Replicas)
 }
 
 func (l *LinstorDriver) isDiskless(name string) (bool, error) {
