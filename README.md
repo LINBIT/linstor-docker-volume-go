@@ -32,3 +32,7 @@ fs = xfs
 
 ## License
 GPL2
+
+# Support
+For further products and professional support, please
+[contact](http://links.linbit.com/support) us.
