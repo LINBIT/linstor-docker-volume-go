@@ -192,15 +192,10 @@ func (l *LinstorDriver) newParams(name string, options map[string]string) (*Lins
 	return params, nil
 }
 
-func (l *LinstorDriver) Create(req *volume.CreateRequest) error {
+func (l *LinstorDriver) Create(req *volume.CreateRequest) (err error) {
 	params, err := l.newParams(req.Name, req.Options)
 	if err != nil {
 		return err
-	}
-	if len(params.Nodes) == 0 {
-		if err = l.canAutoplace(params); err != nil {
-			return err
-		}
 	}
 	c, err := l.newClient()
 	if err != nil {
@@ -220,6 +215,14 @@ func (l *LinstorDriver) Create(req *volume.CreateRequest) error {
 	if err != nil {
 		return err
 	}
+	defer func() {
+		if err != nil {
+			resources, err := c.Resources.GetAll(ctx, req.Name)
+			if err == nil && len(resources) == 0 {
+				c.ResourceDefinitions.Delete(ctx, req.Name)
+			}
+		}
+	}()
 	err = c.ResourceDefinitions.CreateVolumeDefinition(ctx, req.Name, client.VolumeDefinitionCreate{
 		VolumeDefinition: client.VolumeDefinition{
 			SizeKib: params.SizeKiB,
@@ -442,32 +445,6 @@ func (l *LinstorDriver) toDisklessCreate(name, node string, params *LinstorParam
 			Flags:    []string{linstor.FlagDiskless},
 		},
 	}
-}
-
-func (l *LinstorDriver) canAutoplace(params *LinstorParams) error {
-	c, err := l.newClient()
-	if err != nil {
-		return err
-	}
-	ctx := context.Background()
-	pools, err := c.Nodes.GetStoragePoolView(ctx)
-	if err != nil {
-		return err
-	}
-	nodes := map[string]int32{}
-	for _, sp := range pools {
-		if sp.ProviderKind == client.DISKLESS || int64(params.SizeKiB) > sp.FreeCapacity {
-			continue
-		}
-		if params.StoragePool != "" && params.StoragePool != sp.StoragePoolName {
-			continue
-		}
-		nodes[sp.StoragePoolName] += 1
-		if params.Replicas <= nodes[sp.StoragePoolName] {
-			return nil
-		}
-	}
-	return fmt.Errorf("At least %d nodes required", params.Replicas)
 }
 
 func (l *LinstorDriver) isDiskless(name string) (bool, error) {
