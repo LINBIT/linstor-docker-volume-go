@@ -192,30 +192,8 @@ func (l *LinstorDriver) newParams(name string, options map[string]string) (*Lins
 	return params, nil
 }
 
-func (l *LinstorDriver) Create(req *volume.CreateRequest) error {
-	params, err := l.newParams(req.Name, req.Options)
-	if err != nil {
-		return err
-	}
-	c, err := l.newClient()
-	if err != nil {
-		return err
-	}
-	ctx := context.Background()
-	err = c.ResourceDefinitions.Create(ctx, client.ResourceDefinitionCreate{
-		ResourceDefinition: client.ResourceDefinition{
-			Name: req.Name,
-			Props: map[string]string{
-				pluginFlagKey:           pluginFlagValue,
-				pluginFSTypeKey:         params.FS,
-				"FileSystem/MkfsParams": params.FSOpts,
-			},
-		},
-	})
-	if err != nil {
-		return err
-	}
-	err = c.ResourceDefinitions.CreateVolumeDefinition(ctx, req.Name, client.VolumeDefinitionCreate{
+func (l *LinstorDriver) resourcesCreate(ctx context.Context, c *client.Client, req *volume.CreateRequest, params *LinstorParams) error {
+	err := c.ResourceDefinitions.CreateVolumeDefinition(ctx, req.Name, client.VolumeDefinitionCreate{
 		VolumeDefinition: client.VolumeDefinition{
 			SizeKib: params.SizeKiB,
 		},
@@ -242,6 +220,39 @@ func (l *LinstorDriver) Create(req *volume.CreateRequest) error {
 		}
 	}
 	return nil
+}
+
+func (l *LinstorDriver) Create(req *volume.CreateRequest) error {
+	params, err := l.newParams(req.Name, req.Options)
+	if err != nil {
+		return err
+	}
+	c, err := l.newClient()
+	if err != nil {
+		return err
+	}
+	ctx := context.Background()
+	err = c.ResourceDefinitions.Create(ctx, client.ResourceDefinitionCreate{
+		ResourceDefinition: client.ResourceDefinition{
+			Name: req.Name,
+			Props: map[string]string{
+				pluginFlagKey:           pluginFlagValue,
+				pluginFSTypeKey:         params.FS,
+				"FileSystem/MkfsParams": params.FSOpts,
+			},
+		},
+	})
+	if err != nil {
+		return err
+	}
+	err = l.resourcesCreate(ctx, c, req, params)
+	if err != nil {
+		resources, err := c.Resources.GetAll(ctx, req.Name)
+		if err == nil && len(resources) == 0 {
+			c.ResourceDefinitions.Delete(ctx, req.Name)
+		}
+	}
+	return err
 }
 
 func (l *LinstorDriver) Get(req *volume.GetRequest) (*volume.GetResponse, error) {
