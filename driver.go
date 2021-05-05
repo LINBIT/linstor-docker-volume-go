@@ -192,8 +192,7 @@ func (l *LinstorDriver) newParams(name string, options map[string]string) (*Lins
 	return params, nil
 }
 
-func (l *LinstorDriver) resourcesCreate(c *client.Client, req *volume.CreateRequest, params *LinstorParams) error {
-	ctx := context.Background()
+func (l *LinstorDriver) resourcesCreate(ctx context.Context, c *client.Client, req *volume.CreateRequest, params *LinstorParams) error {
 	err := c.ResourceDefinitions.CreateVolumeDefinition(ctx, req.Name, client.VolumeDefinitionCreate{
 		VolumeDefinition: client.VolumeDefinition{
 			SizeKib: params.SizeKiB,
@@ -246,7 +245,7 @@ func (l *LinstorDriver) Create(req *volume.CreateRequest) error {
 	if err != nil {
 		return err
 	}
-	err = l.resourcesCreate(c, req, params)
+	err = l.resourcesCreate(ctx, c, req, params)
 	if err != nil {
 		resources, err := c.Resources.GetAll(ctx, req.Name)
 		if err == nil && len(resources) == 0 {
