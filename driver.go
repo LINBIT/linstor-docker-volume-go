@@ -20,6 +20,8 @@ import (
 	"github.com/vrischmann/envconfig"
 	"gopkg.in/ini.v1"
 	"k8s.io/kubernetes/pkg/util/mount"
+	mountutils "k8s.io/mount-utils"
+	"k8s.io/utils/exec"
 )
 
 const (
@@ -59,6 +61,7 @@ type LinstorDriver struct {
 	node    string
 	root    string
 	mounter *mount.SafeFormatAndMount
+	resizer *mountutils.ResizeFs
 }
 
 func NewLinstorDriver(config, node, root string) *LinstorDriver {
@@ -70,6 +73,7 @@ func NewLinstorDriver(config, node, root string) *LinstorDriver {
 			Interface: mount.New("/bin/mount"),
 			Exec:      mount.NewOsExec(),
 		},
+		resizer: mountutils.NewResizeFs(exec.New()),
 	}
 }
 
@@ -356,6 +360,16 @@ func (l *LinstorDriver) Mount(req *volume.MountRequest) (*volume.MountResponse, 
 	mnt := l.reportedMountPath(req.Name)
 	if _, err = os.Stat(mnt); os.IsNotExist(err) { // check for remount
 		if err = l.mounter.MakeDir(mnt); err != nil {
+			return nil, err
+		}
+	}
+
+	needResize, err := l.resizer.NeedResize(source, target)
+	if err != nil {
+		return nil, err
+	}
+	if needResize {
+		if _, err = l.resizer.Resize(source, target); err != nil {
 			return nil, err
 		}
 	}
