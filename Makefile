@@ -1,5 +1,6 @@
 PLUGIN_NAME=lade/linstor
 PLUGIN_TAG=latest
+PLUGIN_ARCH=amd64
 
 all: clean docker rootfs create
 
@@ -9,20 +10,20 @@ clean:
 
 docker:
 	@echo "### docker build: builder image"
-	@docker build -q -t builder -f Dockerfile.dev .
+	@docker buildx build --platform linux/${PLUGIN_ARCH} -t builder -f Dockerfile.dev .
 	@echo "### extract linstor-docker-volume"
-	@docker create --name tmp builder
+	@docker create --platform linux/${PLUGIN_ARCH} --name tmp builder
 	@docker cp tmp:/go/bin/linstor-docker-volume .
 	@docker rm -vf tmp
 	@docker rmi builder
 	@echo "### docker build: rootfs image with linstor-docker-volume"
-	@docker build -q -t ${PLUGIN_NAME}:rootfs .
+	@docker buildx build --platform linux/${PLUGIN_ARCH} -t ${PLUGIN_NAME}:rootfs .
 	@rm ./linstor-docker-volume
 
 rootfs:
 	@echo "### create rootfs directory in ./plugin/rootfs"
 	@mkdir -p ./plugin/rootfs
-	@docker create --name tmp ${PLUGIN_NAME}:rootfs
+	@docker create --platform linux/${PLUGIN_ARCH} --name tmp ${PLUGIN_NAME}:rootfs
 	@docker export tmp | tar -x -C ./plugin/rootfs
 	@echo "### copy config.json to ./plugin/"
 	@cp config.json ./plugin/

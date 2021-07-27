@@ -20,6 +20,8 @@ import (
 	"github.com/vrischmann/envconfig"
 	"gopkg.in/ini.v1"
 	"k8s.io/kubernetes/pkg/util/mount"
+	mountutils "k8s.io/mount-utils"
+	"k8s.io/utils/exec"
 )
 
 const (
@@ -59,6 +61,7 @@ type LinstorDriver struct {
 	node    string
 	root    string
 	mounter *mount.SafeFormatAndMount
+	resizer *mountutils.ResizeFs
 }
 
 func NewLinstorDriver(config, node, root string) *LinstorDriver {
@@ -70,6 +73,7 @@ func NewLinstorDriver(config, node, root string) *LinstorDriver {
 			Interface: mount.New("/bin/mount"),
 			Exec:      mount.NewOsExec(),
 		},
+		resizer: mountutils.NewResizeFs(exec.New()),
 	}
 }
 
@@ -192,30 +196,8 @@ func (l *LinstorDriver) newParams(name string, options map[string]string) (*Lins
 	return params, nil
 }
 
-func (l *LinstorDriver) Create(req *volume.CreateRequest) error {
-	params, err := l.newParams(req.Name, req.Options)
-	if err != nil {
-		return err
-	}
-	c, err := l.newClient()
-	if err != nil {
-		return err
-	}
-	ctx := context.Background()
-	err = c.ResourceDefinitions.Create(ctx, client.ResourceDefinitionCreate{
-		ResourceDefinition: client.ResourceDefinition{
-			Name: req.Name,
-			Props: map[string]string{
-				pluginFlagKey:           pluginFlagValue,
-				pluginFSTypeKey:         params.FS,
-				"FileSystem/MkfsParams": params.FSOpts,
-			},
-		},
-	})
-	if err != nil {
-		return err
-	}
-	err = c.ResourceDefinitions.CreateVolumeDefinition(ctx, req.Name, client.VolumeDefinitionCreate{
+func (l *LinstorDriver) resourcesCreate(ctx context.Context, c *client.Client, req *volume.CreateRequest, params *LinstorParams) error {
+	err := c.ResourceDefinitions.CreateVolumeDefinition(ctx, req.Name, client.VolumeDefinitionCreate{
 		VolumeDefinition: client.VolumeDefinition{
 			SizeKib: params.SizeKiB,
 		},
@@ -242,6 +224,39 @@ func (l *LinstorDriver) Create(req *volume.CreateRequest) error {
 		}
 	}
 	return nil
+}
+
+func (l *LinstorDriver) Create(req *volume.CreateRequest) error {
+	params, err := l.newParams(req.Name, req.Options)
+	if err != nil {
+		return err
+	}
+	c, err := l.newClient()
+	if err != nil {
+		return err
+	}
+	ctx := context.Background()
+	err = c.ResourceDefinitions.Create(ctx, client.ResourceDefinitionCreate{
+		ResourceDefinition: client.ResourceDefinition{
+			Name: req.Name,
+			Props: map[string]string{
+				pluginFlagKey:           pluginFlagValue,
+				pluginFSTypeKey:         params.FS,
+				"FileSystem/MkfsParams": params.FSOpts,
+			},
+		},
+	})
+	if err != nil {
+		return err
+	}
+	err = l.resourcesCreate(ctx, c, req, params)
+	if err != nil {
+		resources, err := c.Resources.GetAll(ctx, req.Name)
+		if err == nil && len(resources) == 0 {
+			c.ResourceDefinitions.Delete(ctx, req.Name)
+		}
+	}
+	return err
 }
 
 func (l *LinstorDriver) Get(req *volume.GetRequest) (*volume.GetResponse, error) {
@@ -345,6 +360,16 @@ func (l *LinstorDriver) Mount(req *volume.MountRequest) (*volume.MountResponse, 
 	mnt := l.reportedMountPath(req.Name)
 	if _, err = os.Stat(mnt); os.IsNotExist(err) { // check for remount
 		if err = l.mounter.MakeDir(mnt); err != nil {
+			return nil, err
+		}
+	}
+
+	needResize, err := l.resizer.NeedResize(source, target)
+	if err != nil {
+		return nil, err
+	}
+	if needResize {
+		if _, err = l.resizer.Resize(source, target); err != nil {
 			return nil, err
 		}
 	}
