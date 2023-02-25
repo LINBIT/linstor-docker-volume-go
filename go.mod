@@ -12,8 +12,10 @@ require (
 	github.com/rck/unit v0.0.2
 	github.com/smartystreets/goconvey v1.6.4 // indirect
 	github.com/vrischmann/envconfig v1.2.0
+	golang.org/x/text v0.3.2 // indirect
 	gopkg.in/ini.v1 v1.46.0
-	k8s.io/apimachinery v0.0.0-20190827074644-f378a67c6af3 // indirect
+	k8s.io/apimachinery v0.15.7 // indirect
+	k8s.io/klog v0.4.0 // indirect
 	k8s.io/kubernetes v1.14.6
 	k8s.io/mount-utils v0.21.1
 	k8s.io/utils v0.0.0-20201110183641-67b214c5f920
