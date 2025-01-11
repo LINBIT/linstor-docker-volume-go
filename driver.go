@@ -77,15 +77,18 @@ func NewLinstorDriver(config, node, root string) *LinstorDriver {
 	}
 }
 
-func (l *LinstorDriver) newBaseURL(hosts string) (*url.URL, error) {
+func (driver *LinstorDriver) newBaseURL(hosts string) (*url.URL, error) {
 	scheme := "http"
 	host := "localhost:3370"
+
 	if hosts != "" {
 		host = strings.Split(hosts, ",")[0]
+
 		if s := strings.Split(host, "://"); len(s) == 2 {
 			if s[0] == "linstor+ssl" || s[0] == "https" {
 				scheme = "https"
 			}
+
 			host = s[1]
 		}
 	}
@@ -98,12 +101,14 @@ func (l *LinstorDriver) newBaseURL(hosts string) (*url.URL, error) {
 			host += ":3371"
 		}
 	}
+
 	return url.Parse(scheme + "://" + host)
 }
 
-func (l *LinstorDriver) newClient() (*client.Client, error) {
+func (driver *LinstorDriver) newClient() (*client.Client, error) {
 	config := new(LinstorConfig)
-	if err := l.loadConfig(config); err != nil {
+
+	if err := driver.loadConfig(config); err != nil {
 		return nil, err
 	}
 
@@ -115,7 +120,7 @@ func (l *LinstorDriver) newClient() (*client.Client, error) {
 		return nil, err
 	}
 
-	baseURL, err := l.newBaseURL(config.Controllers)
+	baseURL, err := driver.newBaseURL(config.Controllers)
 	if err != nil {
 		return nil, err
 	}
@@ -145,9 +150,10 @@ func (l *LinstorDriver) newClient() (*client.Client, error) {
 	)
 }
 
-func (l *LinstorDriver) newParams(name string, options map[string]string) (*LinstorParams, error) {
+func (driver *LinstorDriver) newParams(options map[string]string) (*LinstorParams, error) {
 	params := new(LinstorParams)
-	if err := l.loadConfig(params); err != nil {
+
+	if err := driver.loadConfig(params); err != nil {
 		return nil, err
 	}
 
@@ -172,17 +178,21 @@ func (l *LinstorDriver) newParams(name string, options map[string]string) (*Lins
 	if params.Size == "" {
 		params.Size = "100MB"
 	}
+
 	u := unit.MustNewUnit(unit.DefaultUnits)
+
 	strSize := params.Size
 	v, err := u.ValueFromString(strSize)
 	if err != nil {
-		return nil, fmt.Errorf("Could not convert '%s' to bytes: %v", strSize, err)
+		return nil, fmt.Errorf("could not convert '%s' to bytes: %v", strSize, err)
 	}
+
 	bytes := v.Value
 	lower := 4 * unit.M
 	if bytes < lower {
 		bytes = lower
 	}
+
 	params.SizeKiB = uint64(bytes / unit.K)
 
 	if params.FS == "" {
@@ -196,7 +206,7 @@ func (l *LinstorDriver) newParams(name string, options map[string]string) (*Lins
 	return params, nil
 }
 
-func (l *LinstorDriver) resourcesCreate(ctx context.Context, c *client.Client, req *volume.CreateRequest, params *LinstorParams) error {
+func (driver *LinstorDriver) resourcesCreate(ctx context.Context, c *client.Client, req *volume.CreateRequest, params *LinstorParams) error {
 	err := c.ResourceDefinitions.CreateVolumeDefinition(ctx, req.Name, client.VolumeDefinitionCreate{
 		VolumeDefinition: client.VolumeDefinition{
 			SizeKib: params.SizeKiB,
@@ -205,6 +215,7 @@ func (l *LinstorDriver) resourcesCreate(ctx context.Context, c *client.Client, r
 	if err != nil {
 		return err
 	}
+
 	if len(params.Nodes) == 0 {
 		return c.Resources.Autoplace(ctx, req.Name, client.AutoPlaceRequest{
 			DisklessOnRemaining: params.DisklessOnRemaining,
@@ -217,24 +228,29 @@ func (l *LinstorDriver) resourcesCreate(ctx context.Context, c *client.Client, r
 			},
 		})
 	}
+
 	for _, node := range params.Nodes {
-		err = c.Resources.Create(ctx, l.toDiskfullCreate(req.Name, node, params))
+		err = c.Resources.Create(ctx, driver.toDiskfullCreate(req.Name, node, params))
 		if err != nil {
 			return err
 		}
 	}
+
 	return nil
 }
 
-func (l *LinstorDriver) Create(req *volume.CreateRequest) error {
-	params, err := l.newParams(req.Name, req.Options)
+// Create implementation
+func (driver *LinstorDriver) Create(req *volume.CreateRequest) error {
+	params, err := driver.newParams(req.Options)
 	if err != nil {
 		return err
 	}
-	c, err := l.newClient()
+
+	c, err := driver.newClient()
 	if err != nil {
 		return err
 	}
+
 	ctx := context.Background()
 	err = c.ResourceDefinitions.Create(ctx, client.ResourceDefinitionCreate{
 		ResourceDefinition: client.ResourceDefinition{
@@ -249,130 +265,99 @@ func (l *LinstorDriver) Create(req *volume.CreateRequest) error {
 	if err != nil {
 		return err
 	}
-	err = l.resourcesCreate(ctx, c, req, params)
-	if err != nil {
-		resources, err := c.Resources.GetAll(ctx, req.Name)
-		if err == nil && len(resources) == 0 {
-			c.ResourceDefinitions.Delete(ctx, req.Name)
-		}
+
+	if err = driver.resourcesCreate(ctx, c, req, params); err != nil {
+		return err
 	}
-	return err
+
+	resources, err := c.Resources.GetAll(ctx, req.Name)
+	if err != nil {
+		return err
+	}
+
+	if len(resources) == 0 {
+		c.ResourceDefinitions.Delete(ctx, req.Name)
+	}
+
+	return nil
 }
 
-func (l *LinstorDriver) Get(req *volume.GetRequest) (*volume.GetResponse, error) {
-	c, err := l.newClient()
+// Remove implementation
+func (driver *LinstorDriver) Remove(req *volume.RemoveRequest) error {
+	return driver.remove(req.Name, true)
+}
+
+// Mount implementation
+func (driver *LinstorDriver) Mount(req *volume.MountRequest) (*volume.MountResponse, error) {
+	params, err := driver.newParams(nil)
 	if err != nil {
 		return nil, err
 	}
+
+	c, err := driver.newClient()
+	if err != nil {
+		return nil, err
+	}
+
 	ctx := context.Background()
-	resourceDef, err := c.ResourceDefinitions.Get(ctx, req.Name)
-	if err != nil {
-		return nil, err
-	}
-	if resourceDef.Props[pluginFlagKey] != pluginFlagValue {
-		return nil, fmt.Errorf("Volume '%s' is not managed by this plugin", req.Name)
-	}
-	vol := &volume.Volume{
-		Name:       resourceDef.Name,
-		Mountpoint: l.mountPoint(resourceDef.Name),
-	}
-	return &volume.GetResponse{vol}, nil
-}
-
-func (l *LinstorDriver) List() (*volume.ListResponse, error) {
-	c, err := l.newClient()
-	if err != nil {
-		return nil, err
-	}
-	ctx := context.Background()
-	request := client.RDGetAllRequest{
-		Props: []string{pluginFlagKey + "=" + pluginFlagValue},
-	}
-	resourceDefs, err := c.ResourceDefinitions.GetAll(ctx, request)
-	if err != nil {
-		return nil, err
-	}
-	vols := []*volume.Volume{}
-	for _, resourceDef := range resourceDefs {
-		if resourceDef.Props[pluginFlagKey] != pluginFlagValue {
-			continue
-		}
-		vols = append(vols, &volume.Volume{
-			Name:       resourceDef.Name,
-			Mountpoint: l.mountPoint(resourceDef.Name),
-		})
-	}
-	return &volume.ListResponse{Volumes: vols}, nil
-}
-
-func (l *LinstorDriver) Remove(req *volume.RemoveRequest) error {
-	return l.remove(req.Name, true)
-}
-
-func (l *LinstorDriver) Path(req *volume.PathRequest) (*volume.PathResponse, error) {
-	return &volume.PathResponse{Mountpoint: l.mountPoint(req.Name)}, nil
-}
-
-func (l *LinstorDriver) Mount(req *volume.MountRequest) (*volume.MountResponse, error) {
-	params, err := l.newParams(req.Name, nil)
-	if err != nil {
-		return nil, err
-	}
-	c, err := l.newClient()
-	if err != nil {
-		return nil, err
-	}
-	ctx := context.Background()
-	if _, err = c.Resources.Get(ctx, req.Name, l.node); err == client.NotFoundError {
-		err = c.Resources.Create(ctx, l.toDisklessCreate(req.Name, l.node, params))
+	if _, err = c.Resources.Get(ctx, req.Name, driver.node); err == client.NotFoundError {
+		err = c.Resources.Create(ctx, driver.toDisklessCreate(req.Name, driver.node, params))
 		if err != nil {
 			return nil, err
 		}
 	}
+
 	// properties are not merged, so we have to query the resdef
 	// as we set the property there
 	resdef, err := c.ResourceDefinitions.Get(ctx, req.Name)
 	if err != nil {
 		return nil, err
 	}
+
 	fstype, ok := resdef.Props[pluginFSTypeKey]
 	if !ok {
-		return nil, fmt.Errorf("Volume '%s' did not contain a file system key", req.Name)
+		return nil, fmt.Errorf("volume '%s' did not contain a file system key", req.Name)
 	}
-	vol, err := c.Resources.GetVolume(ctx, req.Name, l.node, 0)
-	if err != nil {
-		return nil, err
-	}
-	source := vol.DevicePath
-	inUse, err := l.mounter.DeviceOpened(source)
-	if err != nil {
-		return nil, err
-	}
-	if inUse {
-		return nil, fmt.Errorf("unable to get exclusive open on %s", source)
-	}
-	target := l.realMountPath(req.Name)
-	if err = l.mounter.MakeDir(target); err != nil {
-		return nil, err
-	}
-	err = l.mounter.Mount(source, target, fstype, params.MountOpts)
+
+	vol, err := c.Resources.GetVolume(ctx, req.Name, driver.node, 0)
 	if err != nil {
 		return nil, err
 	}
 
-	mnt := l.reportedMountPath(req.Name)
+	source := vol.DevicePath
+	inUse, err := driver.mounter.DeviceOpened(source)
+	if err != nil {
+		return nil, err
+	}
+
+	if inUse {
+		return nil, fmt.Errorf("unable to get exclusive open on %s", source)
+	}
+
+	target := driver.realMountPath(req.Name)
+	if err = driver.mounter.MakeDir(target); err != nil {
+		return nil, err
+	}
+
+	err = driver.mounter.Mount(source, target, fstype, params.MountOpts)
+	if err != nil {
+		return nil, err
+	}
+
+	mnt := driver.reportedMountPath(req.Name)
 	if _, err = os.Stat(mnt); os.IsNotExist(err) { // check for remount
-		if err = l.mounter.MakeDir(mnt); err != nil {
+		if err = driver.mounter.MakeDir(mnt); err != nil {
 			return nil, err
 		}
 	}
 
-	needResize, err := l.resizer.NeedResize(source, target)
+	needResize, err := driver.resizer.NeedResize(source, target)
 	if err != nil {
 		return nil, err
 	}
+
 	if needResize {
-		if _, err = l.resizer.Resize(source, target); err != nil {
+		if _, err = driver.resizer.Resize(source, target); err != nil {
 			return nil, err
 		}
 	}
@@ -380,69 +365,141 @@ func (l *LinstorDriver) Mount(req *volume.MountRequest) (*volume.MountResponse, 
 	return &volume.MountResponse{Mountpoint: mnt}, nil
 }
 
-func (l *LinstorDriver) Unmount(req *volume.UnmountRequest) error {
-	target := l.realMountPath(req.Name)
-	notMounted, err := l.mounter.IsNotMountPoint(target)
+// Path implementation
+func (driver *LinstorDriver) Path(req *volume.PathRequest) (*volume.PathResponse, error) {
+	return &volume.PathResponse{Mountpoint: driver.mountPoint(req.Name)}, nil
+}
+
+// Unmount implementation
+func (driver *LinstorDriver) Unmount(req *volume.UnmountRequest) error {
+	target := driver.realMountPath(req.Name)
+
+	notMounted, err := driver.mounter.IsNotMountPoint(target)
 	if err != nil || notMounted {
 		return err
 	}
-	if err = l.mounter.Unmount(target); err != nil {
+
+	if err = driver.mounter.Unmount(target); err != nil {
 		return err
 	}
 
 	// try to remove now unused dir
 	_ = os.Remove(target)
 
-	diskless, err := l.isDiskless(req.Name)
+	diskless, err := driver.isDiskless(req.Name)
 	// in this case we don't really care about the error, just log it, and keep the diskless assignment.
 	if err != nil {
 		log.Println(err)
 	} else if diskless {
-		return l.remove(req.Name, false)
+		return driver.remove(req.Name, false)
 	}
 
 	return nil
 }
 
-func (l *LinstorDriver) Capabilities() *volume.CapabilitiesResponse {
+// Get implementation
+func (driver *LinstorDriver) Get(req *volume.GetRequest) (*volume.GetResponse, error) {
+	c, err := driver.newClient()
+	if err != nil {
+		return nil, err
+	}
+
+	ctx := context.Background()
+	resourceDef, err := c.ResourceDefinitions.Get(ctx, req.Name)
+	if err != nil {
+		return nil, err
+	}
+
+	if resourceDef.Props[pluginFlagKey] != pluginFlagValue {
+		return nil, fmt.Errorf("volume '%s' is not managed by this plugin", req.Name)
+	}
+
+	vol := &volume.Volume{
+		Name:       resourceDef.Name,
+		Mountpoint: driver.mountPoint(resourceDef.Name),
+	}
+
+	return &volume.GetResponse{Volume: vol}, nil
+}
+
+// List implementation
+func (driver *LinstorDriver) List() (*volume.ListResponse, error) {
+	c, err := driver.newClient()
+	if err != nil {
+		return nil, err
+	}
+
+	ctx := context.Background()
+	request := client.RDGetAllRequest{
+		Props: []string{pluginFlagKey + "=" + pluginFlagValue},
+	}
+
+	resourceDefs, err := c.ResourceDefinitions.GetAll(ctx, request)
+	if err != nil {
+		return nil, err
+	}
+
+	vols := []*volume.Volume{}
+
+	for _, resourceDef := range resourceDefs {
+		if resourceDef.Props[pluginFlagKey] != pluginFlagValue {
+			continue
+		}
+
+		vols = append(vols, &volume.Volume{
+			Name:       resourceDef.Name,
+			Mountpoint: driver.mountPoint(resourceDef.Name),
+		})
+	}
+
+	return &volume.ListResponse{Volumes: vols}, nil
+}
+
+// Capabilities implementation
+func (driver *LinstorDriver) Capabilities() *volume.CapabilitiesResponse {
 	return &volume.CapabilitiesResponse{
 		Capabilities: volume.Capability{Scope: "global"},
 	}
 }
 
-func (l *LinstorDriver) loadConfig(result interface{}) error {
-	if _, err := os.Stat(l.config); os.IsNotExist(err) {
+func (driver *LinstorDriver) loadConfig(result interface{}) error {
+	if _, err := os.Stat(driver.config); os.IsNotExist(err) {
 		return nil
 	}
-	file, err := ini.InsensitiveLoad(l.config)
+
+	file, err := ini.InsensitiveLoad(driver.config)
 	if err != nil {
 		return err
 	}
+
 	return file.Section("global").MapTo(result)
 }
 
-func (l *LinstorDriver) realMountPath(name string) string {
-	return filepath.Join(l.root, name)
+func (driver *LinstorDriver) realMountPath(name string) string {
+	return filepath.Join(driver.root, name)
 }
 
-func (l *LinstorDriver) reportedMountPath(name string) string {
-	return filepath.Join(l.realMountPath(name), datadir)
+func (driver *LinstorDriver) reportedMountPath(name string) string {
+	return filepath.Join(driver.realMountPath(name), datadir)
 }
 
-func (l *LinstorDriver) mountPoint(name string) string {
-	path := l.realMountPath(name)
-	notMounted, err := l.mounter.IsNotMountPoint(path)
+func (driver *LinstorDriver) mountPoint(name string) string {
+	path := driver.realMountPath(name)
+	notMounted, err := driver.mounter.IsNotMountPoint(path)
 	if err != nil || notMounted {
 		return ""
 	}
-	return l.reportedMountPath(name)
+
+	return driver.reportedMountPath(name)
 }
 
-func (l *LinstorDriver) toDiskfullCreate(name, node string, params *LinstorParams) client.ResourceCreate {
+func (driver *LinstorDriver) toDiskfullCreate(name, node string, params *LinstorParams) client.ResourceCreate {
 	props := make(map[string]string)
+
 	if params.StoragePool != "" {
 		props[linstor.KeyStorPoolName] = params.StoragePool
 	}
+
 	return client.ResourceCreate{
 		Resource: client.Resource{
 			Name:     name,
@@ -452,11 +509,13 @@ func (l *LinstorDriver) toDiskfullCreate(name, node string, params *LinstorParam
 	}
 }
 
-func (l *LinstorDriver) toDisklessCreate(name, node string, params *LinstorParams) client.ResourceCreate {
+func (driver *LinstorDriver) toDisklessCreate(name, node string, params *LinstorParams) client.ResourceCreate {
 	props := make(map[string]string)
+
 	if params.DisklessStoragePool != "" {
 		props[linstor.KeyStorPoolName] = params.DisklessStoragePool
 	}
+
 	return client.ResourceCreate{
 		Resource: client.Resource{
 			Name:     name,
@@ -467,12 +526,14 @@ func (l *LinstorDriver) toDisklessCreate(name, node string, params *LinstorParam
 	}
 }
 
-func (l *LinstorDriver) isDiskless(name string) (bool, error) {
-	lopt := client.ListOpts{Resource: []string{name}, Node: []string{l.node}}
-	c, err := l.newClient()
+func (driver *LinstorDriver) isDiskless(name string) (bool, error) {
+	lopt := client.ListOpts{Resource: []string{name}, Node: []string{driver.node}}
+
+	c, err := driver.newClient()
 	if err != nil {
 		return false, err
 	}
+
 	ctx := context.Background()
 
 	// view to get storage information as well
@@ -480,25 +541,28 @@ func (l *LinstorDriver) isDiskless(name string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+
 	if len(resources) != 1 {
-		return false, errors.New("Resource filter has to contain exactly one resource")
+		return false, errors.New("resource filter has to contain exactly one resource")
 	}
+
 	if len(resources[0].Volumes) != 1 {
-		return false, errors.New("There has to be exactly one volume in the resource")
+		return false, errors.New("there has to be exactly one volume in the resource")
 	}
 
 	return resources[0].Volumes[0].ProviderKind == client.DISKLESS, nil
 }
 
-func (l *LinstorDriver) remove(name string, global bool) error {
-	c, err := l.newClient()
+func (driver *LinstorDriver) remove(name string, global bool) error {
+	c, err := driver.newClient()
 	if err != nil {
 		return err
 	}
+
 	ctx := context.Background()
 
 	if !global {
-		return c.Resources.Delete(ctx, name, l.node)
+		return c.Resources.Delete(ctx, name, driver.node)
 	}
 
 	// global
@@ -506,11 +570,13 @@ func (l *LinstorDriver) remove(name string, global bool) error {
 	if err != nil {
 		return err
 	}
+
 	for _, snap := range snaps {
 		err = c.Resources.DeleteSnapshot(ctx, name, snap.Name)
 		if err != nil {
 			return err
 		}
 	}
+
 	return c.ResourceDefinitions.Delete(ctx, name)
 }
