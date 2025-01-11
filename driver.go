@@ -285,7 +285,10 @@ func (l *LinstorDriver) List() (*volume.ListResponse, error) {
 		return nil, err
 	}
 	ctx := context.Background()
-	resourceDefs, err := c.ResourceDefinitions.GetAll(ctx)
+	request := client.RDGetAllRequest{
+		Props: []string{pluginFlagKey + "=" + pluginFlagValue},
+	}
+	resourceDefs, err := c.ResourceDefinitions.GetAll(ctx, request)
 	if err != nil {
 		return nil, err
 	}

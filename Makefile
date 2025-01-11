@@ -1,4 +1,4 @@
-PLUGIN_NAME=lade/linstor
+PLUGIN_NAME=linbit/linstor-docker-volume
 PLUGIN_TAG=latest
 PLUGIN_ARCH=amd64
 
