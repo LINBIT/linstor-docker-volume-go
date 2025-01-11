@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -77,18 +76,29 @@ func NewLinstorDriver(config, node, root string) *LinstorDriver {
 	}
 }
 
-func (driver *LinstorDriver) newBaseURL(hosts string) (*url.URL, error) {
+func (driver *LinstorDriver) newControllerURLs(controllers string) []string {
+	controllerList := strings.Split(controllers, ",")
+
+	urls := []string{}
+
+	for _, controller := range controllerList {
+		url := driver.newControllerURL(controller)
+
+		urls = append(urls, url)
+	}
+
+	return urls
+}
+
+func (driver *LinstorDriver) newControllerURL(controller string) string {
 	scheme := "http"
 	host := "localhost:3370"
-
-	if hosts != "" {
-		host = strings.Split(hosts, ",")[0]
-
+	if controller != "" {
+		host = controller
 		if s := strings.Split(host, "://"); len(s) == 2 {
 			if s[0] == "linstor+ssl" || s[0] == "https" {
 				scheme = "https"
 			}
-
 			host = s[1]
 		}
 	}
@@ -102,7 +112,7 @@ func (driver *LinstorDriver) newBaseURL(hosts string) (*url.URL, error) {
 		}
 	}
 
-	return url.Parse(scheme + "://" + host)
+	return scheme + "://" + host
 }
 
 func (driver *LinstorDriver) newClient() (*client.Client, error) {
@@ -120,10 +130,7 @@ func (driver *LinstorDriver) newClient() (*client.Client, error) {
 		return nil, err
 	}
 
-	baseURL, err := driver.newBaseURL(config.Controllers)
-	if err != nil {
-		return nil, err
-	}
+	controllerURLs := driver.newControllerURLs(config.Controllers)
 
 	tlsConfig, err := tlsconfig.Client(tlsconfig.Options{
 		CertFile:           config.CertFile,
@@ -137,7 +144,7 @@ func (driver *LinstorDriver) newClient() (*client.Client, error) {
 	}
 
 	return client.NewClient(
-		client.BaseURL(baseURL),
+		client.Controllers(controllerURLs),
 		client.BasicAuth(&client.BasicAuthCfg{
 			Username: config.Username,
 			Password: config.Password,
