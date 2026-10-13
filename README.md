@@ -1,5 +1,16 @@
 # Linstor docker volume plugin
 
+## Archived
+
+This repository will be archived soon and is no longer maintained by LINBIT.
+
+The upstream for this plugin is
+[beornf/linstor-docker-volume](https://github.com/beornf/linstor-docker-volume). Please use that repository
+for the latest code, issues, and pull requests.
+
+If you are looking for a modern, actively maintained solution for containers and storage, consider
+[linstor-csi](https://github.com/piraeusdatastore/linstor-csi), the LINSTOR CSI driver.
+
 Development of this plugin is coordinated on
 [beornf/linstor-docker-volume](https://github.com/beornf/linstor-docker-volume). This is the modern version of
 a [Python based plugin](https://github.com/LINBIT/linstor-docker-volume) developed by LINBIT. Thanks to [Beorn
